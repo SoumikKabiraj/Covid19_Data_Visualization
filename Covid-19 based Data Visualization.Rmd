@@ -1,0 +1,474 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+<h2>CSE3020 DATA VISUALIZATION J-COMPONENT</h2>
+<h3>Topic: COVID-19 based data visualization and analysis</h3>
+<h3>Team: Soumik Kabiraj [20BCE1504], Mayank Yadav [20BCE1674]</h3>
+<h3>Slot: D2</h3><br>
+
+
+***
+<h3>Importing necessary libraries</h3>
+```{r}
+library(readr) 
+library(tidyverse)
+library(plotly)
+library(ggthemes)
+library(DT)
+library(scales)
+library(openair) 
+library(corrplot) 
+library(caTools) 
+library(caret)
+```
+
+
+<h3>Reading datasets</h3>
+```{r}
+confirmed <- read_csv("C:/Users/SOUMIK/Desktop/DV J-component/time_series_covid_19_confirmed.csv",col_types = cols(.default = col_double(), `Province/State` = col_character(), `Country/Region` = col_character()))
+
+recovered <- read_csv(file = "C:/Users/SOUMIK/Desktop/DV J-component/time_series_covid_19_recovered.csv",col_types = cols(.default = col_double(),`Province/State` = col_character(), `Country/Region` = col_character()))
+
+deaths <- read_csv(file = "C:/Users/SOUMIK/Desktop/DV J-component/time_series_covid_19_deaths.csv",col_types = cols(.default = col_double(),`Province/State` = col_character(), `Country/Region` = col_character()))
+
+codes <- read_csv('C:/Users/SOUMIK/Desktop/DV J-component/2014_world_gdp_with_codes.csv',col_types = cols(COUNTRY = col_character(),`GDP (BILLIONS)` = col_double(),CODE = col_character()))
+
+data <- read.csv("C:/Users/SOUMIK/Desktop/DV J-component/Conditions_Contributing_to_COVID-19_Deaths__by_State_and_Age__Provisional_2020-2022.csv")
+
+df <- read.csv("C:/Users/SOUMIK/Desktop/DV J-component/covid_19_india.csv")
+
+dim(confirmed)
+dim(recovered)
+dim(deaths)
+dim(data)
+dim(df)
+```
+
+```{r}
+head(confirmed)
+head(recovered)
+head(deaths)
+head(data)
+head(df)
+```
+
+
+<h3>DATA PREPROCESSING</h3>
+```{r}
+colnames(confirmed)[2]="Country"
+colnames(recovered)[2]="Country"
+colnames(deaths)[2]="Country"
+```
+
+```{r}
+confirmed <- confirmed %>%
+  gather("Date", "Confirmed", -c("Province/State", "Country", "Lat", "Long")) %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+recovered <- recovered %>%
+  gather("Date", "Recovered", -c("Province/State", "Country", "Lat", "Long")) %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+deaths <- deaths %>%
+  gather("Date", "Deaths", -c("Province/State", "Country", "Lat", "Long")) %>%
+  mutate(Date = as.Date(Date, "%m/%d/%y"))
+
+head(confirmed)
+head(recovered)
+head(deaths)
+```
+
+
+```{r}
+#Merging confirmed, recovered and deaths dataset into one dataset
+ts_total <- confirmed %>%
+  left_join(deaths) %>%
+  left_join(recovered) %>%
+  mutate(Recovered = replace_na(Recovered, replace = 0))
+
+head(ts_total)
+dim(ts_total)
+```
+
+
+```{r}
+#We all know "Diamond Princess" and "MS Zaandam" are cruises, So we have to remove them from the data
+ts_total <- ts_total %>%
+  filter(Country != "Diamond Princess") %>%
+  filter(Country != "MS Zaandam")
+ts_total$Deaths[is.na(ts_total$Deaths)] <- 0
+```
+
+
+```{r}
+#Grouping by country, date and incorporating new cases
+cases_latest <- ts_total %>%
+  group_by(Country, Date) %>%
+  summarise(Confirmed  = sum(Confirmed),Recovered = sum(Recovered),Deaths = sum(Deaths)) %>%
+  mutate("New Cases" = Confirmed - lag(Confirmed, 1) ) %>%
+  filter(Date == max(Date))
+
+day_latest <- max(cases_latest$Date)
+
+head(cases_latest)
+```
+
+```{r}
+#Created a dataset including total news of COVID-19
+cases_total_date <- ts_total %>%
+  rename(Region = Country) %>%
+  group_by(Date) %>%
+  summarise(Confirmed = sum(Confirmed),
+            Deaths = sum(Deaths),
+            Recovered = sum(Recovered)) %>%
+  mutate("New_Cases" = Confirmed - lag(Confirmed, 1))
+
+cases_total_date$New_Cases[is.na(cases_total_date$New_Cases)] <- 0 
+
+cases_total_latest <- cases_total_date %>%
+  filter(Date == max(Date))
+
+head(cases_total_latest)
+head(cases_total_date)
+```
+
+
+```{r}
+codes <- codes %>%
+  select(COUNTRY, CODE) %>%
+  rename(Region = COUNTRY ,Code = CODE) %>%
+  rownames_to_column("id")
+head(codes)
+```
+
+```{r}
+codes$id <- as.integer(codes$id)
+head(codes)
+```
+
+```{r}
+codes$Region <- codes$Region %>%
+  str_replace(pattern = "United States", replacement = "US")
+```
+
+
+```{r}
+#adding country codes with cases_latest dataset
+cases_latest_codes <- cases_latest %>%
+  left_join(codes, by = c("Country" = "Region" )) %>%
+  arrange(desc(Confirmed))
+head(cases_latest_codes)
+```
+
+```{r}
+cases_latest_codes %>%
+  select(Country,Code, Date, Confirmed, `New Cases`, Recovered, Deaths) %>%
+  arrange(desc(Confirmed)) %>%
+  datatable(rownames = FALSE,options = list())
+```
+
+```{r}
+cases_all <- cases_total_date %>%
+  select(-Confirmed, -New_Cases) %>%
+  gather("Status", "Cases", -"Date")
+
+barchart <- ggplot(data = cases_total_date, aes(x = Date)) +
+  geom_bar(aes(y = Confirmed), position = "stack", stat = "identity", fill = "#ff5050") +
+  geom_bar(data = cases_all, aes(y = Cases, fill = Status), position = "stack", stat = "identity") +
+  scale_fill_manual(values = c("#000000", "#009900")) +
+  scale_y_continuous(breaks = seq(0, 21000000, by = 1000000), labels = comma) +
+  theme(panel.background = element_rect(fill = "White"),
+        legend.position = "bottom",
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank()) +
+  ggtitle("World COVID-19 Total Cases by Day")
+
+ggplotly(barchart) 
+```
+
+```{r}
+cases_total_date <- cases_total_date %>%
+  group_by(Date, Confirmed) %>%
+  mutate(Mortality_rate = Deaths / Confirmed, Recovery_rate = Recovered / Confirmed) %>%ungroup()
+
+barchart_1 <-cases_total_date %>%
+  select(Date, Mortality_rate, Recovery_rate) %>%
+  gather(status.ratio, ratio, -Date ) %>%
+  ggplot(aes(x = Date, y = ratio, fill = status.ratio)) +
+  geom_bar(stat = "identity", position = "dodge") +
+    theme(panel.background = element_rect(fill = "White"),
+          legend.position = "bottom",
+          axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks = element_blank()) +
+    ggtitle("The Mortality_rate and the Recovery_rate")
+
+ggplotly(barchart_1) %>%
+layout(legend = list(orientation = 'h'))
+```
+
+
+```{r}
+conf<- cases_total_date[,"Confirmed"]
+date <- seq(from=as.Date('2020-01-22'),by=1,to = as.Date('2021-05-29'))
+calendarPlot(data.frame(conf, date), pollutant = 'Confirmed', year = 2020, main = "Confirmed Cases")
+```
+
+
+```{r}
+rec <- cases_total_date[,"Recovered"]
+calendarPlot(data.frame(rec, date), pollutant = 'Recovered', year = 2020, main = "Recovered Cases", cols = "PiYG")
+```
+
+```{r}
+det <- cases_total_date[,"Deaths"]
+calendarPlot(data.frame(det, date), pollutant = 'Deaths', year = 2020, main = "Deaths", cols = "RdGy")
+```
+
+```{r}
+New_Cases <- cases_total_date[,"New_Cases"]
+calendarPlot(data.frame(New_Cases, date), pollutant = 'New_Cases', year = 2020, main = "New Cases", cols = "BrBG")
+```
+
+```{r}
+cases_total_date %>%
+  select(-Date) %>%
+  na.omit() %>%
+  cor(use = "pairwise.complete.obs") %>%
+  corrplot.mixed()
+```
+
+
+```{r}
+top_10_confirmed <- cases_latest %>%
+  select(Country, Confirmed) %>%
+  arrange(desc(Confirmed))
+
+top_10_confirmed[1:10,] %>%
+  ggplot(aes(x = reorder(Country,Confirmed), y = Confirmed )) +
+  geom_bar(stat = "identity", fill  = "red", width = 0.8) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "", y = "", title = "Top 10 (the Most Confirmed Cases)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+```
+
+```{r}
+top_10_Deaths <- cases_latest %>%
+  select(Country, Deaths) %>%
+  arrange(desc(Deaths))
+
+top_10_Deaths[1:10,] %>%
+  ggplot(aes(x = reorder(Country,Deaths), y = Deaths )) +
+  geom_bar(stat = "identity", fill  = "blue", width = 0.8) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "", y = "", title = "Top 10 (the Most Deaths)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+```
+
+```{r}
+top_10_Recovered <- cases_latest %>%
+    select(Country, Recovered) %>%
+  arrange(desc(Recovered))
+
+top_10_Recovered[1:10,] %>%
+  ggplot(aes(x = reorder(Country,Recovered), y = Recovered )) +
+  geom_bar(stat = "identity", fill  = "green", width = 0.8) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(x = "", y = "", title = "Top 10 (the Most Recovered)") +
+  theme(axis.text.x = element_text(angle = 45)) +
+  theme(axis.title = element_text(size = 14, colour = "black"),
+        axis.text.y = element_text(size = 11, face = "bold"))
+```
+
+```{r}
+head(cases_latest)
+```
+
+```{r}
+options(repr.plot.width = 40, repr.plot.height = 9)
+
+cases_latest %>%
+    select(Country, Confirmed, Recovered, Deaths) %>%
+    gather(key = group_var, value = "Cases", -Country, na.rm = TRUE) %>%
+    group_by(Country, group_var) %>%
+    summarise(n = sum(Cases), .groups = "drop_last") %>%
+    arrange(desc(n)) %>%
+    group_by(group_var) %>%
+    slice(1:5)%>%
+  
+    ggplot(aes(x = Country, y = n, fill=Country)) +
+    geom_bar(stat = "identity") +
+    facet_grid(~ group_var, scales = "free") +
+    scale_y_continuous(labels = scales::comma) +
+    geom_label(aes(label=round(n/1000000, 1)), size=2, fill="white") +
+    labs(title = "Top Countries per Case Type", subtitle = "Numbers in Millions") + theme(
+    axis.text.x = element_text(angle = 30, vjust = 1, hjust = 1))
+```
+
+```{r}
+top_6_affected <- ts_total %>%
+  select(Country, Date, Confirmed, Deaths, Recovered) %>%
+  filter(Country %in% c("US", "Spain", "Italy", "United Kingdom",
+                                 "Russia","France")) %>%
+  group_by(Country, Date) %>%
+  summarise(Confirmed  = sum(Confirmed),
+            Recovered = sum(Recovered),
+            Deaths = sum(Deaths)) %>%
+  mutate("New_Cases" = Confirmed - lag(Confirmed, 1),
+         "Recovery_Rate" = Recovered / Confirmed ,
+         "Mortality_Rate" = Deaths / Confirmed) %>%
+  mutate("New_Cases" = round(New_Cases, 3),
+         "Recovery_Rate" = round(Recovery_Rate, 3),
+         "Mortality_Rate" = round(Mortality_Rate, 3))
+
+top_6_affected$New_Cases[is.na(top_6_affected$New_Cases)] <- 0
+top_6_affected$Recovery_Rate[is.nan(top_6_affected$Recovery_Rate)] <- 0
+top_6_affected$Mortality_Rate[is.nan(top_6_affected$Mortality_Rate)] <- 0
+```
+
+
+```{r}
+top_6_affected %>%
+  ggplot(aes(x = Date, y = Mortality_Rate, fill = Country)) +
+  geom_bar(stat = "identity",alpha = 0.8) +
+  facet_wrap(~ Country) +
+  labs(x = "", y = "Mortality Rate") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none",
+        axis.title.y = element_text(face = "bold", size = 10))
+```
+
+
+<h3>COMORBIDITIES</h3>
+```{r}
+data %>% 
+  group_by(Condition.Group) %>% 
+  summarise(covid_deaths = sum(COVID.19.Deaths, na.rm = TRUE)) %>% 
+  mutate(relative_frequency = covid_deaths/sum(covid_deaths)) %>% 
+  arrange(desc(covid_deaths))
+```
+
+```{r}
+data %>%
+  group_by(Age.Group) %>% 
+  summarise(covid_deaths = sum(COVID.19.Deaths, na.rm = TRUE)) %>% 
+  mutate(relative_frequency = covid_deaths/sum(covid_deaths)) %>%
+  filter(Age.Group != 'All Ages' & Age.Group != 'Not stated' )%>%
+  arrange(desc(covid_deaths))
+```
+
+```{r}
+comorb_data <- data %>% 
+  filter(Age.Group != 'All Ages' & Age.Group != 'Not stated' ) %>%
+  filter(Condition.Group != 'COVID-19') %>%
+  drop_na(COVID.19.Deaths) %>% 
+  select(-c(Flag, Number.of.Mentions, Condition.Group ,ICD10_codes, Data.As.Of, Year, Month, State, Group)) %>% 
+  rename(Age_Group = Age.Group, Covid_Deaths = COVID.19.Deaths, Start_Date = Start.Date, End_Date = End.Date) %>%  
+  arrange(desc(Covid_Deaths))
+
+final_comorb <- comorb_data %>% 
+  group_by(Age_Group, Condition) %>% 
+  summarise(Covid_Deaths = sum(Covid_Deaths, na.rm = T)) %>% 
+  mutate(Relative_Frequency = Covid_Deaths/sum(Covid_Deaths)) %>% 
+  arrange(desc(Covid_Deaths))
+ 
+
+
+head(final_comorb)
+```
+
+```{r}
+options(repr.plot.width=15, repr.plot.height = 10)
+final_comorb %>% 
+  ggplot(mapping = aes(x = Age_Group, y = Condition))+
+  geom_tile(mapping = aes(fill = Covid_Deaths))
+```
+
+
+<h3>Visualizations and analysis of India data</h3>
+```{r}
+datatable <- df %>%filter(Date == max(Date))
+  
+datatable %>%
+  select(State.UnionTerritory, Date, Confirmed, Cured, Deaths) %>%
+  arrange(desc(Confirmed)) %>%
+  datatable(rownames = FALSE,options = list())
+```
+
+```{r}
+Top_6 <- 
+  df %>%
+  dplyr::filter(Date == max(Date)) %>%
+  arrange(desc(Confirmed)) 
+Top_6 <- Top_6[1:6,]
+
+percent <- paste(Top_6$State.UnionTerritory ,round(100*Top_6$Confirmed / sum(Top_6$Confirmed), 2), "%")
+
+Top_6 %>%
+  ggplot(aes(x = "", y = Confirmed, fill = percent) ) +
+  geom_bar(stat = "identity",  width = 1) +
+  coord_polar(theta = "y") +
+  scale_fill_brewer(palette = "Pastel1") +
+  theme(panel.grid = element_blank(), panel.background = element_blank(),
+       plot.title = element_text(hjust = 0.5),
+       axis.text.x = element_blank()) +
+  theme_economist() +
+  labs(x="", y = "", title = "Confirmed Cases Ratio", fill = "") 
+```
+
+```{r}
+Top_6_all <- df %>%
+  filter(State.UnionTerritory == Top_6$State.UnionTerritory)
+
+Top_6_all %>%
+  select(State.UnionTerritory, Date, Confirmed, Cured, Deaths) %>%
+  gather(status, cases, -c("State.UnionTerritory", "Date")) %>%
+  ggplot()+
+  geom_line(aes(Date, cases, group = status, color = status), lwd = 1) +
+  labs(title="Confirmed/Recovered cases over time by top 6 State/Union Territory",color = "") +
+  facet_wrap(~ State.UnionTerritory, scales = "free")+ theme_fivethirtyeight() 
+```
+
+
+<h3>LINEAR REGRESSION</h3>
+```{r}
+model <- lm(Deaths ~ Confirmed + Recovered + `New Cases`, data=cases_latest)
+```
+
+
+```{r}
+test <- summary(model)
+R_sq <- test$r.squared
+sprintf("The R-squared value for our model is: %f",R_sq)
+```
+
+```{r}
+adj_R_sq <- test$adj.r.squared
+sprintf("The adjusted R-squared value for our model is: %f",adj_R_sq)
+```
+INFERENCE: The obtained adjusted R_squared value for our model is 0.889553. Therefore, our model is able to explain 88.95% of the variance.<br>
+
+
+<h3>K-FOLD CROSS-VALIDATION</h3>
+```{r}
+fitControl <- trainControl(method = "repeatedcv",   
+                           number = 10,     # number of folds
+                           repeats = 10)    # repeated ten times
+```
+
+```{r}
+model.cv <- train(Deaths ~ Confirmed + Recovered + `New Cases`, data = cases_latest, method = "lasso", trControl = fitControl, preProcess = c('scale', 'center'))
+model.cv
+```
+
+INFERENCE: We have used number of folds as 10 and number of repetitions as 10. The data has been preprocessed (scaling and centre) before feeding into the model. The final R-squared value obtained was 0.9097 ie 90.97% with the optimum fractions being 0.5. <br><br>
+
+***
